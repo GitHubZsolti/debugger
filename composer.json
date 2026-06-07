@@ -1,0 +1,12 @@
+{
+    "name": "debugger/debugger",
+    "description": "Debugger package for PHP.",
+    "type": "library",
+    "autoload": {
+        "psr-4": {
+            "Debugger\\": ["src/"]
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
