@@ -3,9 +3,9 @@
 namespace NetRoam\Debug;
 
 use Closure;
+use SplFileInfo;
 use ReflectionClass;
 use ReflectionMethod;
-use ReflectionObject;
 use ReflectionFunction;
 use ReflectionProperty;
 use ReflectionException;
@@ -18,6 +18,7 @@ class Debugger {
     private string $stylesheet;
     private string $script;
     private bool $cyclicCheck = true;
+    private bool $alphabeticalOrder = false;
     private bool $withMethods = false;
     private int $objectCounter = 0;
     private array $seenObjects = [];
@@ -25,6 +26,9 @@ class Debugger {
     private int $autoOpenLevel = 1;
 
     public function __construct() {
+        $this->withMethods = false;
+        $this->alphabeticalOrder = false;
+
         $this->stylesheet = file_get_contents(__DIR__ . "/assets/debug.css");
         $this->script = file_get_contents(__DIR__ . "/assets/debug.js");
         echo("<style type=\"text/css\">{$this->stylesheet}</style>");
@@ -39,17 +43,21 @@ class Debugger {
         if(is_null(self::$instance)) {
             self::$instance = new Debugger();
         }
+
         return self::$instance;
     }
 
     public function dump(mixed ...$vars): void {
         $this->processedObjects = [];
+
         $caller = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)[1];
+        $f = new SplFileInfo($caller["file"]);
+
         $output = "<div class=\"dbg-window\">";
         $variables = $vars[0];
         $varCount = count($variables);
 
-        $output .= "<span class=\"called-by\">{$caller["file"]} at line {$caller["line"]}</span>";
+        $output .= "<span class=\"called-by\"><abbr title=\"{$f->getPath()}\">{$f->getFilename()}</abbr> at line {$caller["line"]}</span>";
 
         foreach($variables as $key => $var) {
             if($varCount === 1) {
@@ -67,7 +75,11 @@ class Debugger {
     public function withMethods(): self {
         $this->withMethods = true;
         return $this;
-    } 
+    }
+    public function setAlphabeticalOrder(bool $alphabetical = true): self {        
+        $this->alphabeticalOrder = $alphabetical;
+        return $this;
+    }
     private function formatArray(array $var, int $level = 0): string {
         $randID = strtoupper(md5(rand(1, 20000000)));
         $output = "<span class=\"var-array\">";
@@ -134,7 +146,7 @@ class Debugger {
 
         if($this->cyclicCheck === true || $noCyclicCheck === false) {
             if (in_array($var, $this->processedObjects)) {
-                return "Object(" . get_class($var) . ") {#{$id}} (cyclic)";
+                return "Object(" . get_class($var) . ") {#{$id}} (cyclic reference)";
             }
         }
 
@@ -142,11 +154,11 @@ class Debugger {
         $class = new ReflectionClass($var);
 
         $randID = strtoupper(md5(rand(40000000, 80000000)));
-/*
-        if(count((array) $var) === 0) {
-            return "<span class=\"var-object\">(empty) Object {$class->getName()} {(#{$id})}</span>";
+
+        if(count((array) $var) === 0 && !$this->withMethods) {
+            return "<span class=\"var-object\">Object {$class->getName()} {(#{$id})}</span>";
         }
-*/
+
         $arrowStr = "<span class=\"arrow object ";
         $arrowStr .= ($level < $this->autoOpenLevel) ? "" : "down";
         $arrowStr .= " btn-{$randID}\" onclick='toggle(\"{$randID}\")'>" . $this->drawArrow() . "</span>";
@@ -375,6 +387,7 @@ class Debugger {
 
         $class = new ReflectionClass($obj);
         $props = $class->getProperties();
+        if($this->alphabeticalOrder) sort($props);
 
         foreach($props as $property) {
             $output .= $this->formatProperty($property, $obj, $level);
@@ -389,11 +402,20 @@ class Debugger {
 
     private function getMethodList(object $obj, int $level = 0): string {
         $output = "";
+        $excludeMethods = [
+            "_bad_state_ex",
+            "__clone",
+            "__debugInfo",
+            "__serialize",
+            "__unserialize"
+        ];
 
         $class = new ReflectionClass($obj);
-        $methods = $class->getMethods();        
+        $methods = $class->getMethods();
+        if($this->alphabeticalOrder) sort($methods);
 
         foreach($methods as $method) {
+            if(in_array($method->getName(), $excludeMethods)) continue;
             $output .= $this->formatMethod($method, $obj, $level);
         }
 
