@@ -429,6 +429,7 @@ class Debugger {
     private function getVisibility(ReflectionProperty|ReflectionParameter|ReflectionMethod $item): string {
         $output = "";
         if($item->isFinal()) $output .= "final ";
+        if($item->isAbstract()) $output .= "abstract ";
 
         if ($item->isPublic()) {
             $output .= "public";
@@ -437,6 +438,8 @@ class Debugger {
         } else {
             $output .= "private";
         }
+
+        if($item->isStatic()) $output .= " static";
 
         return $output;
     }
