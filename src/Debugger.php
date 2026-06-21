@@ -1,13 +1,16 @@
 <?php
 
-namespace Debugger;
+namespace NetRoam\Debug;
 
 use Closure;
 use ReflectionClass;
+use ReflectionMethod;
+use ReflectionObject;
 use ReflectionFunction;
 use ReflectionProperty;
 use ReflectionException;
 use ReflectionNamedType;
+use ReflectionParameter;
 use ReflectionUnionType;
 
 class Debugger {
@@ -15,6 +18,7 @@ class Debugger {
     private string $stylesheet;
     private string $script;
     private bool $cyclicCheck = true;
+    private bool $withMethods = false;
     private int $objectCounter = 0;
     private array $seenObjects = [];
     private array $processedObjects = [];
@@ -39,6 +43,7 @@ class Debugger {
     }
 
     public function dump(mixed ...$vars): void {
+        $this->processedObjects = [];
         $caller = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS)[1];
         $output = "<div class=\"dbg-window\">";
         $variables = $vars[0];
@@ -59,7 +64,10 @@ class Debugger {
         $output .= "</div>";
         echo $output;
     }
-
+    public function withMethods(): self {
+        $this->withMethods = true;
+        return $this;
+    } 
     private function formatArray(array $var, int $level = 0): string {
         $randID = strtoupper(md5(rand(1, 20000000)));
         $output = "<span class=\"var-array\">";
@@ -126,18 +134,19 @@ class Debugger {
 
         if($this->cyclicCheck === true || $noCyclicCheck === false) {
             if (in_array($var, $this->processedObjects)) {
-                return "Object(" . get_class($var) . ") {#{$id}}";
+                return "Object(" . get_class($var) . ") {#{$id}} (cyclic)";
             }
         }
 
         $this->processedObjects[] = $var;
         $class = new ReflectionClass($var);
+
         $randID = strtoupper(md5(rand(40000000, 80000000)));
-
+/*
         if(count((array) $var) === 0) {
-            return "<span class=\"var-object\">Object {$class->getName()} {(#{$id})}</span>";
+            return "<span class=\"var-object\">(empty) Object {$class->getName()} {(#{$id})}</span>";
         }
-
+*/
         $arrowStr = "<span class=\"arrow object ";
         $arrowStr .= ($level < $this->autoOpenLevel) ? "" : "down";
         $arrowStr .= " btn-{$randID}\" onclick='toggle(\"{$randID}\")'>" . $this->drawArrow() . "</span>";
@@ -153,6 +162,11 @@ class Debugger {
         $output .= "<br />";
 
         $output .= $this->getPropertyList($var, ++$level);
+
+        if($this->withMethods) {
+            $output .= $this->getMethodList($var, $level);
+        }
+
         $output .= $this->getIndent(--$level) . "</span>";
 
         $output .= "}</span>";
@@ -237,13 +251,45 @@ class Debugger {
     }
 
     private function formatNull(): string {
-        return "<span class=\"var-null\">null</span>";
+        return "<span class=\"var-null\">null</span>";    
     }
+    private function formatParameter(ReflectionParameter $property, object $object, int $level = 0): string {
+        if(method_exists($property, "isInitialized")) {
+            if(!$property->isInitialized($object)) {
+                return $this->getIndent($level) . "<span class=\"var-visibility\">{$this->getVisibility($property)} </span><span class=\"var-property-name\">\${$property->getName()} . </span> = <span class=\"var-uninitialized\">uninitialized</span><br />";
+            }
+        }
+        
+        $type = $property->getType();
+        
+        try {
+            $actualValue = $property->getDefaultValue();
+        } catch(ReflectionException $e) {
+            $actualValue = null;
+        }
 
+        $output = "";
+
+        if(!is_null($type)) {
+            if(!is_null($this->getPropertyType($property))) {
+                $output .= "<span class=\"var-property\">{$property->getType()}</span>" . chr(32);
+            }
+        };
+
+        $output .= "<span class=\"var-property-name\">\${$property->getName()}</span>";
+        if(!is_null($actualValue)) {
+            $output .= "<span class=\"var-property\"> = </span>";
+            $output .= "<span class=\"var-property\">";
+            $output .= $this->formatValue($actualValue, $level++);
+            $output .= "</span>";            
+        }
+
+        return $output;
+    }
     private function formatProperty(ReflectionProperty $property, object $object, int $level = 0): string {
         if(method_exists($property, "isInitialized")) {
             if(!$property->isInitialized($object)) {
-                return $this->getIndent($level) . "<span class=\"var-visibility\">{$this->getPropertyVisibility($property)} </span><span class=\"var-property-name\">\${$property->getName()} . </span> = <span class=\"var-uninitialized\">uninitialized</span><br />";
+                return $this->getIndent($level) . "<span class=\"var-visibility\">{$this->getVisibility($property)} </span><span class=\"var-property-name\">\${$property->getName()} . </span> = <span class=\"var-uninitialized\">uninitialized</span><br />";
             }
         }
 
@@ -256,7 +302,7 @@ class Debugger {
 
         $output = "";
 
-        $output .= $this->getIndent($level) . "<span class=\"var-visibility\">{$this->getPropertyVisibility($property)} </span>";
+        $output .= $this->getIndent($level) . "<span class=\"var-visibility\">{$this->getVisibility($property)} </span>";
 
         if(!is_null($type)) {
             if(!is_null($this->getPropertyType($property))) {
@@ -274,7 +320,21 @@ class Debugger {
 
         return $output;
     }
+    private function formatMethod(ReflectionMethod $method, object $object, int $level = 0): string {
+        $visibility = $this->getIndent($level) . "<span class=\"var-visibility\">{$this->getVisibility($method)}</span>";
 
+        $output = $visibility . chr(32) . "function" . chr(32) . $method->getName() . "(";
+        
+        $params = $method->getParameters();
+        foreach($params as $key => $param) {
+            $output .= $this->formatParameter($param, $object, $level);
+            if(array_key_last($params) !== $key) $output .= "," . chr(32);
+        }
+
+        $output .= ")";
+        $output .= "<br />";
+        return $output;
+    }
     private function formatValue(mixed $var, int $level = 0): mixed {
         return match(true) {
             $var instanceof Closure => $this->formatClosure($var, $level),
@@ -310,7 +370,7 @@ class Debugger {
 
         return $this->seenObjects[$oid];
     }
-    private function getPropertyList(object $obj, int $level = 0) {
+    private function getPropertyList(object $obj, int $level = 0): string {
         $output = "";
 
         $class = new ReflectionClass($obj);
@@ -320,6 +380,23 @@ class Debugger {
             $output .= $this->formatProperty($property, $obj, $level);
         }
 
+        if(!empty($output) && $this->withMethods) {
+            $output .= "<br />";            
+        }
+
+        return $output;
+    }
+
+    private function getMethodList(object $obj, int $level = 0): string {
+        $output = "";
+
+        $class = new ReflectionClass($obj);
+        $methods = $class->getMethods();        
+
+        foreach($methods as $method) {
+            $output .= $this->formatMethod($method, $obj, $level);
+        }
+
         return $output;
     }
 
@@ -327,16 +404,21 @@ class Debugger {
         return ($param->hasDefaultValue() === true) ? $param->getDefaultValue() : "<i>DEFAULT</i>";
     }
 
-    private function getPropertyVisibility(ReflectionProperty $property) {
-        if ($property->isPublic()) {
-            return "public";
-        } elseif ($property->isProtected()) {
-            return "protected";
+    private function getVisibility(ReflectionProperty|ReflectionParameter|ReflectionMethod $item): string {
+        $output = "";
+        if($item->isFinal()) $output .= "final ";
+
+        if ($item->isPublic()) {
+            $output .= "public";
+        } elseif ($item->isProtected()) {
+            $output .= "protected";
         } else {
-            return "private";
+            $output .= "private";
         }
+
+        return $output;
     }
-    private function getPropertyType(ReflectionProperty $property) {
+    private function getPropertyType(ReflectionProperty|ReflectionParameter $property) {
         $type = $property->getType();
         if ($type instanceof ReflectionNamedType) {
             return ($type->allowsNull() ? '?' : '') . $type->getName() . chr(32);
@@ -346,5 +428,5 @@ class Debugger {
         }
 
         return null;
-    }
+    }    
 }
